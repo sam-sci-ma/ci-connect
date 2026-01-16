@@ -5,7 +5,7 @@ import { useRouter } from "next/navigation"
 import { createClient } from "@/lib/supabase/client"
 import BottomNav from "@/components/bottomNavbar"
 import TopNav from "@/components/TopNav"
-import { User, Settings, LogOut, Edit } from "lucide-react"
+import { User, Settings, LogOut, Edit, X, Camera } from "lucide-react"
 import AlertModal, { useAlertModal } from "@/components/ui/alert-modal"
 
 export const dynamic = 'force-dynamic'
@@ -37,6 +37,8 @@ export default function ProfilePage() {
     graduation_year: "",
     program_type: "fundamental" as 'executive' | 'fundamental'
   })
+  const [avatarFile, setAvatarFile] = useState<File | null>(null)
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const alertModal = useAlertModal()
   const router = useRouter()
@@ -117,6 +119,28 @@ export default function ProfilePage() {
     if (!profile || !supabase) return
 
     try {
+      let avatarUrl = profile.avatar_url
+
+      // Upload avatar if provided
+      if (avatarFile) {
+        const fileExt = avatarFile.name.split('.').pop()
+        const fileName = `avatar-${profile.id}-${Date.now()}.${fileExt}`
+        const filePath = `${profile.id}/${fileName}`
+        
+        const { error: uploadError } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, avatarFile)
+
+        if (uploadError) throw uploadError
+
+        const { data: { publicUrl } } = supabase.storage
+          .from('avatars')
+          .getPublicUrl(filePath)
+
+        avatarUrl = publicUrl
+      }
+
+      // Update profile
       const { error } = await supabase
         .from('profiles')
         .update({
@@ -125,13 +149,27 @@ export default function ProfilePage() {
           institution: editForm.institution,
           degree_program: editForm.degree_program,
           graduation_year: editForm.graduation_year ? parseInt(editForm.graduation_year) : null,
-          program_type: editForm.program_type
+          program_type: editForm.program_type,
+          avatar_url: avatarUrl
         })
         .eq('id', profile.id)
 
       if (error) throw error
 
-      setProfile({ ...profile, ...editForm, graduation_year: editForm.graduation_year ? parseInt(editForm.graduation_year) : undefined })
+      setProfile({ 
+        ...profile, 
+        ...editForm, 
+        graduation_year: editForm.graduation_year ? parseInt(editForm.graduation_year) : undefined,
+        avatar_url: avatarUrl
+      })
+      
+      // Clean up preview URL
+      if (avatarPreview) {
+        URL.revokeObjectURL(avatarPreview)
+      }
+      
+      setAvatarFile(null)
+      setAvatarPreview(null)
       setEditing(false)
     } catch (error) {
       console.error('Error updating profile:', error)
@@ -143,6 +181,35 @@ export default function ProfilePage() {
     if (!supabase) return
     await supabase.auth.signOut()
     router.push("/auth/login")
+  }
+
+  function handleAvatarChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (file) {
+      // Validate file type
+      if (!file.type.startsWith('image/')) {
+        alertModal.showAlert('Please select a valid image file.', 'Invalid File', 'warning')
+        return
+      }
+
+      // Validate file size (2MB limit for avatars)
+      if (file.size > 2 * 1024 * 1024) {
+        alertModal.showAlert('Avatar size must be less than 2MB.', 'File Too Large', 'warning')
+        return
+      }
+
+      setAvatarFile(file)
+      const previewUrl = URL.createObjectURL(file)
+      setAvatarPreview(previewUrl)
+    }
+  }
+
+  function removeAvatar() {
+    if (avatarPreview) {
+      URL.revokeObjectURL(avatarPreview)
+    }
+    setAvatarFile(null)
+    setAvatarPreview(null)
   }
 
   if (error) {
@@ -185,13 +252,36 @@ export default function ProfilePage() {
           <div className="bg-gray-800 rounded-lg p-6 space-y-6">
             {/* Avatar */}
             <div className="flex justify-center">
-              <div className="w-24 h-24 bg-violet-400 rounded-full flex items-center justify-center">
-                {profile.avatar_url ? (
-                  <img src={profile.avatar_url} alt={profile.full_name || profile.email} className="w-24 h-24 rounded-full" />
-                ) : (
-                  <span className="text-black font-bold text-2xl">
-                    {(profile.full_name || profile.email).charAt(0).toUpperCase()}
-                  </span>
+              <div className="relative">
+                <div className="w-24 h-24 bg-violet-400 rounded-full flex items-center justify-center overflow-hidden">
+                  {avatarPreview ? (
+                    <img src={avatarPreview} alt="Avatar preview" className="w-24 h-24 object-cover" />
+                  ) : profile.avatar_url ? (
+                    <img src={profile.avatar_url} alt={profile.full_name || profile.email} className="w-24 h-24 object-cover" />
+                  ) : (
+                    <span className="text-black font-bold text-2xl">
+                      {(profile.full_name || profile.email).charAt(0).toUpperCase()}
+                    </span>
+                  )}
+                </div>
+                {editing && (
+                  <label className="absolute bottom-0 right-0 bg-violet-400 text-black p-2 rounded-full cursor-pointer hover:bg-violet-300 transition-colors">
+                    <Camera className="h-4 w-4" />
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleAvatarChange}
+                      className="hidden"
+                    />
+                  </label>
+                )}
+                {avatarPreview && (
+                  <button
+                    onClick={removeAvatar}
+                    className="absolute -top-2 -right-2 bg-red-500 text-white p-1 rounded-full hover:bg-red-600 transition-colors"
+                  >
+                    <X className="h-3 w-3" />
+                  </button>
                 )}
               </div>
             </div>
